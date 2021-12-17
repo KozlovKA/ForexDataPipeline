@@ -1,7 +1,12 @@
+import csv
+import json
+from datetime import datetime, timedelta
+
+import requests
 from airflow import DAG
+from airflow.operators.python import PythonOperator
 from airflow.providers.http.sensors.http import HttpSensor
 from airflow.sensors.filesystem import FileSensor
-from datetime import datetime, timedelta
 
 default_args = {
     "owner": "airflow",
@@ -11,6 +16,27 @@ default_args = {
     "retries": 3,
     "retry_delay": timedelta(minutes=5)
 }
+
+
+def download_rates():
+    BASE_URL = "https://gist.githubusercontent.com/marclamberti/f45f872dea4dfd3eaa015a4a1af4b39b/raw/"
+    ENDPOINTS = {
+        'USD': 'api_forex_exchange_usd.json',
+        'EUR': 'api_forex_exchange_eur.json'
+    }
+    with open('/opt/airflow/dags/files/forex_currencies.csv') as forex_currencies:
+        reader = csv.DictReader(forex_currencies, delimiter=';')
+        for idx, row in enumerate(reader):
+            base = row['base']
+            with_pairs = row['with_pairs'].split(' ')
+            indata = requests.get(f"{BASE_URL}{ENDPOINTS[base]}").json()
+            outdata = {'base': base, 'rates': {}, 'last_update': indata['date']}
+            for pair in with_pairs:
+                outdata['rates'][pair] = indata['rates'][pair]
+            with open('/opt/airflow/dags/files/forex_rates.json', 'a') as outfile:
+                json.dump(outdata, outfile)
+                outfile.write('\n')
+
 
 with DAG("forex_data_pipeline",
          start_date=datetime(2021, 1, 1),
@@ -31,4 +57,9 @@ with DAG("forex_data_pipeline",
         filepath="forex_currencies.csv",
         poke_interval=5,
         timeout=20
+    )
+    currency_check = PythonOperator(
+        task_id="currency_check",
+        python_callable=download_rates,
+
     )
